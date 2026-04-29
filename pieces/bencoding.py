@@ -1,78 +1,78 @@
 #
-# pieces - An experimental BitTorrent client
+# pieces - 一个实验性的 BitTorrent 客户端
 #
-# Copyright 2016 markus.eliasson@gmail.com
+# 版权所有 2016 markus.eliasson@gmail.com
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# 根据 Apache 许可证 2.0 版授权
+# 除非符合许可证规定，否则您不得使用此文件
+# 您可以在以下网址获取许可证副本
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# 除非适用法律要求或书面同意，软件
+# 根据许可证分发是基于"按原样"的基础，
+# 不提供任何明示或暗示的保证或条件
+# 请参阅许可证以了解具体的管理权限和
+# 限制
 
 from collections import OrderedDict
 
 
-# Indicates start of integers
+# 表示整数的开始
 TOKEN_INTEGER = b'i'
 
-# Indicates start of list
+# 表示列表的开始
 TOKEN_LIST = b'l'
 
-# Indicates start of dict
+# 表示字典的开始
 TOKEN_DICT = b'd'
 
-# Indicate end of lists, dicts and integer values
+# 表示列表、字典和整数值的结束
 TOKEN_END = b'e'
 
-# Delimits string length from string data
+# 分隔字符串长度和字符串数据
 TOKEN_STRING_SEPARATOR = b':'
 
 
 class Decoder:
     """
-    Decodes a bencoded sequence of bytes.
+    解码 bencode 编码的字节序列
     """
     def __init__(self, data: bytes):
         if not isinstance(data, bytes):
-            raise TypeError('Argument "data" must be of type bytes')
+            raise TypeError('参数 "data" 必须是 bytes 类型')
         self._data = data
         self._index = 0
 
     def decode(self):
         """
-        Decodes the bencoded data and return the matching python object.
+        解码 bencode 数据并返回对应的 Python 对象
 
-        :return A python object representing the bencoded data
+        :return 表示 bencode 数据的 Python 对象
         """
         c = self._peek()
         if c is None:
-            raise EOFError('Unexpected end-of-file')
+            raise EOFError('意外的文件结束')
         elif c == TOKEN_INTEGER:
-            self._consume()  # The token
+            self._consume()  # 消费标记
             return self._decode_int()
         elif c == TOKEN_LIST:
-            self._consume()  # The token
+            self._consume()  # 消费标记
             return self._decode_list()
         elif c == TOKEN_DICT:
-            self._consume()  # The token
+            self._consume()  # 消费标记
             return self._decode_dict()
         elif c == TOKEN_END:
             return None
         elif c in b'01234567899':
             return self._decode_string()
         else:
-            raise RuntimeError('Invalid token read at {0}'.format(
+            raise RuntimeError('在位置 {0} 读取到无效的标记'.format(
                 str(self._index)))
 
     def _peek(self):
         """
-        Return the next character from the bencoded data or None
+        返回 bencode 数据中的下一个字符，如果没有则返回 None
         """
         if self._index + 1 >= len(self._data):
             return None
@@ -80,16 +80,16 @@ class Decoder:
 
     def _consume(self) -> bytes:
         """
-        Read (and therefore consume) the next character from the data
+        读取（并消费）数据中的下一个字符
         """
         self._index += 1
 
     def _read(self, length: int) -> bytes:
         """
-        Read the `length` number of bytes from data and return the result
+        从数据中读取指定长度的字节并返回结果
         """
         if self._index + length > len(self._data):
-            raise IndexError('Cannot read {0} bytes from current position {1}'
+            raise IndexError('无法从当前位置 {1} 读取 {0} 字节'
                              .format(str(length), str(self._index)))
         res = self._data[self._index:self._index+length]
         self._index += length
@@ -97,8 +97,7 @@ class Decoder:
 
     def _read_until(self, token: bytes) -> bytes:
         """
-        Read from the bencoded data until the given token is found and return
-        the characters read.
+        从 bencode 数据中读取直到找到给定标记，并返回读取的字符
         """
         try:
             occurrence = self._data.index(token, self._index)
@@ -106,7 +105,7 @@ class Decoder:
             self._index = occurrence + 1
             return result
         except ValueError:
-            raise RuntimeError('Unable to find token {0}'.format(
+            raise RuntimeError('无法找到标记 {0}'.format(
                 str(token)))
 
     def _decode_int(self):
@@ -114,10 +113,10 @@ class Decoder:
 
     def _decode_list(self):
         res = []
-        # Recursive decode the content of the list
+        # 递归解码列表内容
         while self._data[self._index: self._index + 1] != TOKEN_END:
             res.append(self.decode())
-        self._consume()  # The END token
+        self._consume()  # 消费 END 标记
         return res
 
     def _decode_dict(self):
@@ -126,7 +125,7 @@ class Decoder:
             key = self.decode()
             obj = self.decode()
             res[key] = obj
-        self._consume()  # The END token
+        self._consume()  # 消费 END 标记
         return res
 
     def _decode_string(self):
@@ -137,25 +136,25 @@ class Decoder:
 
 class Encoder:
     """
-    Encodes a python object to a bencoded sequence of bytes.
+    将 Python 对象编码为 bencode 字节序列
 
-    Supported python types is:
+    支持的 Python 类型：
         - str
         - int
         - list
         - dict
         - bytes
 
-    Any other type will simply be ignored.
+    任何其他类型都将被忽略
     """
     def __init__(self, data):
         self._data = data
 
     def encode(self) -> bytes:
         """
-        Encode a python object to a bencoded binary string
+        将 Python 对象编码为 bencode 二进制字符串
 
-        :return The bencoded binary data
+        :return bencode 二进制数据
         """
         return self.encode_next(self._data)
 
@@ -202,6 +201,6 @@ class Encoder:
                 result += key
                 result += value
             else:
-                raise RuntimeError('Bad dict')
+                raise RuntimeError('无效的字典')
         result += b'e'
         return result

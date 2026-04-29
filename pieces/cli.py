@@ -1,19 +1,19 @@
 #
-# pieces - An experimental BitTorrent client
+# pieces - 一个实验性的 BitTorrent 客户端
 #
-# Copyright 2016 markus.eliasson@gmail.com
+# 版权所有 2016 markus.eliasson@gmail.com
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# 根据 Apache 许可证 2.0 版授权
+# 除非符合许可证规定，否则您不得使用此文件
+# 您可以在以下网址获取许可证副本
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# 除非适用法律要求或书面同意，软件
+# 根据许可证分发是基于"按原样"的基础，
+# 不提供任何明示或暗示的保证或条件
+# 请参阅许可证以了解具体的管理权限和
+# 限制
 
 import argparse
 import asyncio
@@ -29,9 +29,9 @@ from pieces.client import TorrentClient
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('torrent',
-                        help='the .torrent to download')
+                        help='要下载的 .torrent 文件')
     parser.add_argument('-v', '--verbose', action='store_true',
-                        help='enable verbose output')
+                        help='启用详细输出')
 
     args = parser.parse_args()
     if args.verbose:
@@ -42,7 +42,7 @@ def main():
     task = loop.create_task(client.start())
 
     def signal_handler(*_):
-        logging.info('Exiting, please wait until everything is shutdown...')
+        logging.info('正在退出，请等待所有内容关闭...')
         client.stop()
         task.cancel()
 
@@ -51,4 +51,4 @@ def main():
     try:
         loop.run_until_complete(task)
     except CancelledError:
-        logging.warning('Event loop was canceled')
+        logging.warning('事件循环被取消')

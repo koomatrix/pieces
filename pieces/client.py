@@ -1,19 +1,19 @@
 #
-# pieces - An experimental BitTorrent client
+# pieces - 一个实验性的 BitTorrent 客户端
 #
-# Copyright 2016 markus.eliasson@gmail.com
+# 版权所有 2016 markus.eliasson@gmail.com
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# 根据 Apache 许可证 2.0 版授权
+# 除非符合许可证规定，否则您不得使用此文件
+# 您可以在以下网址获取许可证副本
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# 除非适用法律要求或书面同意，软件
+# 根据许可证分发是基于"按原样"的基础，
+# 不提供任何明示或暗示的保证或条件
+# 请参阅许可证以了解具体的管理权限和
+# 限制
 
 import asyncio
 import logging
@@ -27,83 +27,81 @@ from hashlib import sha1
 from pieces.protocol import PeerConnection, REQUEST_SIZE
 from pieces.tracker import Tracker
 
-# The number of max peer connections per TorrentClient
+# 每个 TorrentClient 的最大对等连接数
 MAX_PEER_CONNECTIONS = 40
 
 
 class TorrentClient:
     """
-    The torrent client is the local peer that holds peer-to-peer
-    connections to download and upload pieces for a given torrent.
+    Torrent 客户端是本地对等节点，用于维护点对点连接以下载和上传给定 torrent 的片段
 
-    Once started, the client makes periodic announce calls to the tracker
-    registered in the torrent meta-data. These calls results in a list of
-    peers that should be tried in order to exchange pieces.
+    启动后，客户端会定期向注册在 torrent 元数据中的 tracker 发起声明调用
+    这些调用会返回一个对等节点列表，应该尝试与这些节点交换片段
 
-    Each received peer is kept in a queue that a pool of PeerConnection
-    objects consume. There is a fix number of PeerConnections that can have
-    a connection open to a peer. Since we are not creating expensive threads
-    (or worse yet processes) we can create them all at once and they will
-    be waiting until there is a peer to consume in the queue.
+    每个接收到的对等节点都保存在一个队列中，由 PeerConnection 对象池消费
+    有一个固定数量的 PeerConnection 可以与对等节点建立连接
+    由于我们没有创建昂贵的线程（或更糟糕的是进程）
+    我们可以一次性创建它们，它们将等待队列中有对等节点可供消费
     """
     def __init__(self, torrent):
         self.tracker = Tracker(torrent)
-        # The list of potential peers is the work queue, consumed by the
-        # PeerConnections
+        # 潜在对等节点列表是工作队列，由 PeerConnection 消费
         self.available_peers = Queue()
-        # The list of peers is the list of workers that *might* be connected
-        # to a peer. Else they are waiting to consume new remote peers from
-        # the `available_peers` queue. These are our workers!
+        # 对等节点列表是可能已连接到对等节点的工作进程列表
+        # 否则它们正在等待从 `available_peers` 队列消费新的远程对等节点
+        # 这些就是我们的工作进程！
         self.peers = []
-        # The piece manager implements the strategy on which pieces to
-        # request, as well as the logic to persist received pieces to disk.
+        # PieceManager 实现了请求哪些片段的策略，
+        # 以及将接收到的片段持久化到磁盘的逻辑
         self.piece_manager = PieceManager(torrent)
         self.abort = False
 
     async def start(self):
         """
-        Start downloading the torrent held by this client.
+        开始下载此客户端持有的 torrent
 
-        This results in connecting to the tracker to retrieve the list of
-        peers to communicate with. Once the torrent is fully downloaded or
-        if the download is aborted this method will complete.
+        这将导致连接到 tracker 以获取要通信的对等节点列表
+        一旦 torrent 完全下载或下载被中止，此方法将完成
         """
-        self.peers = [PeerConnection(self.available_peers,
-                                     self.tracker.torrent.info_hash,
-                                     self.tracker.peer_id,
-                                     self.piece_manager,
-                                     self._on_block_retrieved)
-                      for _ in range(MAX_PEER_CONNECTIONS)]
+        try:
+            self.peers = [PeerConnection(self.available_peers,
+                                         self.tracker.torrent.info_hash,
+                                         self.tracker.peer_id,
+                                         self.piece_manager,
+                                         self._on_block_retrieved)
+                          for _ in range(MAX_PEER_CONNECTIONS)]
 
-        # The time we last made an announce call (timestamp)
-        previous = None
-        # Default interval between announce calls (in seconds)
-        interval = 30*60
+            # 上次发起声明调用的时间（时间戳）
+            previous = None
+            # 声明调用之间的默认间隔（秒）
+            interval = 30*60
 
-        while True:
-            if self.piece_manager.complete:
-                logging.info('Torrent fully downloaded!')
-                break
-            if self.abort:
-                logging.info('Aborting download...')
-                break
+            while True:
+                if self.piece_manager.complete:
+                    logging.info('Torrent 完全下载完成！')
+                    break
+                if self.abort:
+                    logging.info('正在中止下载...')
+                    break
 
-            current = time.time()
-            if (not previous) or (previous + interval < current):
-                response = await self.tracker.connect(
-                    first=previous if previous else False,
-                    uploaded=self.piece_manager.bytes_uploaded,
-                    downloaded=self.piece_manager.bytes_downloaded)
+                current = time.time()
+                if (not previous) or (previous + interval < current):
+                    response = await self.tracker.connect(
+                        first=previous if previous else False,
+                        uploaded=self.piece_manager.bytes_uploaded,
+                        downloaded=self.piece_manager.bytes_downloaded)
 
-                if response:
-                    previous = current
-                    interval = response.interval
-                    self._empty_queue()
-                    for peer in response.peers:
-                        self.available_peers.put_nowait(peer)
-            else:
-                await asyncio.sleep(5)
-        self.stop()
+                    if response:
+                        previous = current
+                        interval = response.interval
+                        self._empty_queue()
+                        for peer in response.peers:
+                            self.available_peers.put_nowait(peer)
+                else:
+                    await asyncio.sleep(5)
+        finally:
+            self.stop()
+            await self.tracker.close()
 
     def _empty_queue(self):
         while not self.available_peers.empty():
@@ -111,23 +109,21 @@ class TorrentClient:
 
     def stop(self):
         """
-        Stop the download or seeding process.
+        停止下载或做种过程
         """
         self.abort = True
         for peer in self.peers:
             peer.stop()
         self.piece_manager.close()
-        self.tracker.close()
 
     def _on_block_retrieved(self, peer_id, piece_index, block_offset, data):
         """
-        Callback function called by the `PeerConnection` when a block is
-        retrieved from a peer.
+        当从对等节点检索到块时，由 `PeerConnection` 调用的回调函数
 
-        :param peer_id: The id of the peer the block was retrieved from
-        :param piece_index: The piece index this block is a part of
-        :param block_offset: The block offset within its piece
-        :param data: The binary data retrieved
+        :param peer_id: 检索到块的对等节点的 ID
+        :param piece_index: 此块所属的片段索引
+        :param block_offset: 块在其片段内的偏移量
+        :param data: 检索到的二进制数据
         """
         self.piece_manager.block_received(
             peer_id=peer_id, piece_index=piece_index,
@@ -136,11 +132,9 @@ class TorrentClient:
 
 class Block:
     """
-    The block is a partial piece, this is what is requested and transferred
-    between peers.
+    块是片段的一部分，这是在节点之间请求和传输的内容
 
-    A block is most often of the same size as the REQUEST_SIZE, except for the
-    final block which might (most likely) is smaller than REQUEST_SIZE.
+    块通常与 REQUEST_SIZE 大小相同，除了最后一个块可能（很可能）小于 REQUEST_SIZE
     """
     Missing = 0
     Pending = 1
@@ -156,13 +150,10 @@ class Block:
 
 class Piece:
     """
-    The piece is a part of of the torrents content. Each piece except the final
-    piece for a torrent has the same length (the final piece might be shorter).
+    片段是 torrent 内容的一部分。除了 torrent 的最后一个片段外，每个片段的长度相同（最后一个片段可能更短）
 
-    A piece is what is defined in the torrent meta-data. However, when sharing
-    data between peers a smaller unit is used - this smaller piece is refereed
-    to as `Block` by the unofficial specification (the official specification
-    uses piece for this one as well, which is slightly confusing).
+    片段是在 torrent 元数据中定义的内容。然而，在节点之间共享数据时使用更小的单位
+    这个更小的单位被非官方规范称为 `Block`（官方规范也使用 piece 来称呼这个，这有点令人困惑）
     """
     def __init__(self, index: int, blocks: [], hash_value):
         self.index = index
@@ -171,14 +162,14 @@ class Piece:
 
     def reset(self):
         """
-        Reset all blocks to Missing regardless of current state.
+        将所有块重置为 Missing 状态，无论当前状态如何
         """
         for block in self.blocks:
             block.status = Block.Missing
 
     def next_request(self) -> Block:
         """
-        Get the next Block to be requested
+        获取下一个要请求的块
         """
         missing = [b for b in self.blocks if b.status is Block.Missing]
         if missing:
@@ -188,10 +179,10 @@ class Piece:
 
     def block_received(self, offset: int, data: bytes):
         """
-        Update block information that the given block is now received
+        更新块信息，表示给定的块现在已接收
 
-        :param offset: The block offset (within the piece)
-        :param data: The block data
+        :param offset: 块偏移量（在片段内）
+        :param data: 块数据
         """
         matches = [b for b in self.blocks if b.offset == offset]
         block = matches[0] if matches else None
@@ -199,24 +190,23 @@ class Piece:
             block.status = Block.Retrieved
             block.data = data
         else:
-            logging.warning('Trying to complete a non-existing block {offset}'
+            logging.warning('尝试完成不存在的块 {offset}'
                             .format(offset=offset))
 
     def is_complete(self) -> bool:
         """
-        Checks if all blocks for this piece is retrieved (regardless of SHA1)
+        检查此片段的所有块是否已检索（无论 SHA1 如何）
 
-        :return: True or False
+        :return: True 或 False
         """
         blocks = [b for b in self.blocks if b.status is not Block.Retrieved]
-        return len(blocks) is 0
+        return len(blocks) == 0
 
     def is_hash_matching(self):
         """
-        Check if a SHA1 hash for all the received blocks match the piece hash
-        from the torrent meta-info.
+        检查所有接收到的块的 SHA1 哈希是否与 torrent 元信息中的片段哈希匹配
 
-        :return: True or False
+        :return: True 或 False
         """
         piece_hash = sha1(self.data).digest()
         return self.hash == piece_hash
@@ -224,27 +214,24 @@ class Piece:
     @property
     def data(self):
         """
-        Return the data for this piece (by concatenating all blocks in order)
+        返回此片段的数据（按顺序连接所有块）
 
-        NOTE: This method does not control that all blocks are valid or even
-        existing!
+        注意：此方法不控制所有块是否有效甚至是否存在！
         """
         retrieved = sorted(self.blocks, key=lambda b: b.offset)
         blocks_data = [b.data for b in retrieved]
         return b''.join(blocks_data)
 
-# The type used for keeping track of pending request that can be re-issued
+# 用于跟踪待处理请求的类型，可以重新发起请求
 PendingRequest = namedtuple('PendingRequest', ['block', 'added'])
 
 
 class PieceManager:
     """
-    The PieceManager is responsible for keeping track of all the available
-    pieces for the connected peers as well as the pieces we have available for
-    other peers.
+    PieceManager 负责跟踪连接的对等节点可用的所有片段，
+    以及我们可供其他对等节点使用的片段
 
-    The strategy on which piece to request is made as simple as possible in
-    this implementation.
+    在此实现中，选择请求哪个片段的策略尽可能简单
     """
     def __init__(self, torrent):
         self.torrent = torrent
@@ -253,15 +240,14 @@ class PieceManager:
         self.missing_pieces = []
         self.ongoing_pieces = []
         self.have_pieces = []
-        self.max_pending_time = 300 * 1000  # 5 minutes
+        self.max_pending_time = 300 * 1000  # 5 分钟
         self.missing_pieces = self._initiate_pieces()
         self.total_pieces = len(torrent.pieces)
         self.fd = os.open(self.torrent.output_file,  os.O_RDWR | os.O_CREAT)
 
     def _initiate_pieces(self) -> [Piece]:
         """
-        Pre-construct the list of pieces and blocks based on the number of
-        pieces and request size for this torrent.
+        根据此 torrent 的片段数量和请求大小，预先构建片段和块列表
         """
         torrent = self.torrent
         pieces = []
@@ -269,11 +255,9 @@ class PieceManager:
         std_piece_blocks = math.ceil(torrent.piece_length / REQUEST_SIZE)
 
         for index, hash_value in enumerate(torrent.pieces):
-            # The number of blocks for each piece can be calculated using the
-            # request size as divisor for the piece length.
-            # The final piece however, will most likely have fewer blocks
-            # than 'regular' pieces, and that final block might be smaller
-            # then the other blocks.
+            # 每个片段的块数可以使用请求大小作为片段长度的除数来计算
+            # 然而，最后一个片段的块数可能比"常规"片段少，
+            # 而且最后一个块可能比其他块小
             if index < (total_pieces - 1):
                 blocks = [Block(index, offset * REQUEST_SIZE, REQUEST_SIZE)
                           for offset in range(std_piece_blocks)]
@@ -284,8 +268,7 @@ class PieceManager:
                           for offset in range(num_blocks)]
 
                 if last_length % REQUEST_SIZE > 0:
-                    # Last block of the last piece might be smaller than
-                    # the ordinary request size.
+                    # 最后一个片段的最后一个块可能比普通请求大小小
                     last_block = blocks[-1]
                     last_block.length = last_length % REQUEST_SIZE
                     blocks[-1] = last_block
@@ -294,74 +277,69 @@ class PieceManager:
 
     def close(self):
         """
-        Close any resources used by the PieceManager (such as open files)
+        关闭 PieceManager 使用的任何资源（如打开的文件）
         """
         if self.fd:
             os.close(self.fd)
+            self.fd = None
 
     @property
     def complete(self):
         """
-        Checks whether or not the all pieces are downloaded for this torrent.
+        检查此 torrent 的所有片段是否已下载
 
-        :return: True if all pieces are fully downloaded else False
+        :return: 如果所有片段完全下载则返回 True，否则返回 False
         """
         return len(self.have_pieces) == self.total_pieces
 
     @property
     def bytes_downloaded(self) -> int:
         """
-        Get the number of bytes downloaded.
+        获取已下载的字节数
 
-        This method Only counts full, verified, pieces, not single blocks.
+        此方法只计算完整的、已验证的片段，而不是单个块
         """
         return len(self.have_pieces) * self.torrent.piece_length
 
     @property
     def bytes_uploaded(self) -> int:
-        # TODO Add support for sending data
+        # TODO 添加发送数据的支持
         return 0
 
     def add_peer(self, peer_id, bitfield):
         """
-        Adds a peer and the bitfield representing the pieces the peer has.
+        添加对等节点和表示对等节点拥有的片段的位字段
         """
         self.peers[peer_id] = bitfield
 
     def update_peer(self, peer_id, index: int):
         """
-        Updates the information about which pieces a peer has (reflects a Have
-        message).
+        更新对等节点拥有哪些片段的信息（反映 Have 消息）
         """
         if peer_id in self.peers:
             self.peers[peer_id][index] = 1
 
     def remove_peer(self, peer_id):
         """
-        Tries to remove a previously added peer (e.g. used if a peer connection
-        is dropped)
+        尝试删除先前添加的对等节点（例如，当对等节点连接断开时使用）
         """
         if peer_id in self.peers:
             del self.peers[peer_id]
 
     def next_request(self, peer_id) -> Block:
         """
-        Get the next Block that should be requested from the given peer.
+        获取应该从给定对等节点请求的下一个块
 
-        If there are no more blocks left to retrieve or if this peer does not
-        have any of the missing pieces None is returned
+        如果没有更多块可检索，或者此对等节点没有任何缺失的片段，则返回 None
         """
-        # The algorithm implemented for which piece to retrieve is a simple
-        # one. This should preferably be replaced with an implementation of
-        # "rarest-piece-first" algorithm instead.
+        # 实现的请求哪个片段的算法很简单
+        # 这应该优先替换为"最稀有片段优先"算法的实现
         #
-        # The algorithm tries to download the pieces in sequence and will try
-        # to finish started pieces before starting with new pieces.
+        # 该算法尝试按顺序下载片段，并会尝试完成已开始的片段，然后再开始新的片段
         #
-        # 1. Check any pending blocks to see if any request should be reissued
-        #    due to timeout
-        # 2. Check the ongoing pieces to get the next block to request
-        # 3. Check if this peer have any of the missing pieces not yet started
+        # 1. 检查任何待处理的块，看是否有任何请求应该因超时而重新发起
+        # 2. 检查正在进行的片段以获取下一个要请求的块
+        # 3. 检查此对等节点是否有任何尚未开始的缺失片段
         if peer_id not in self.peers:
             return None
 
@@ -374,20 +352,18 @@ class PieceManager:
 
     def block_received(self, peer_id, piece_index, block_offset, data):
         """
-        This method must be called when a block has successfully been retrieved
-        by a peer.
+        当块成功被对等节点检索到时，必须调用此方法
 
-        Once a full piece have been retrieved, a SHA1 hash control is made. If
-        the check fails all the pieces blocks are put back in missing state to
-        be fetched again. If the hash succeeds the partial piece is written to
-        disk and the piece is indicated as Have.
+        一旦检索到完整的片段，就会进行 SHA1 哈希检查。如果检查失败，
+        所有片段块都会被放回缺失状态以便重新获取。如果哈希成功，
+        部分片段会被写入磁盘，片段被标记为 Have
         """
-        logging.debug('Received block {block_offset} for piece {piece_index} '
-                      'from peer {peer_id}: '.format(block_offset=block_offset,
+        logging.debug('收到片段 {piece_index} 的块 {block_offset} '
+                      '来自对等节点 {peer_id}: '.format(block_offset=block_offset,
                                                      piece_index=piece_index,
                                                      peer_id=peer_id))
 
-        # Remove from pending requests
+        # 从待处理请求中移除
         for index, request in enumerate(self.pending_blocks):
             if request.block.piece == piece_index and \
                request.block.offset == block_offset:
@@ -407,46 +383,43 @@ class PieceManager:
                                 len(self.missing_pieces) -
                                 len(self.ongoing_pieces))
                     logging.info(
-                        '{complete} / {total} pieces downloaded {per:.3f} %'
+                        '{complete} / {total} 个片段已下载 {per:.3f} %'
                         .format(complete=complete,
                                 total=self.total_pieces,
                                 per=(complete/self.total_pieces)*100))
                 else:
-                    logging.info('Discarding corrupt piece {index}'
+                    logging.info('丢弃损坏的片段 {index}'
                                  .format(index=piece.index))
                     piece.reset()
         else:
-            logging.warning('Trying to update piece that is not ongoing!')
+            logging.warning('尝试更新不在进行中的片段！')
 
     def _expired_requests(self, peer_id) -> Block:
         """
-        Go through previously requested blocks, if any one have been in the
-        requested state for longer than `MAX_PENDING_TIME` return the block to
-        be re-requested.
+        遍历先前请求的块，如果有任何块在请求状态中停留的时间超过 `MAX_PENDING_TIME`，
+        则返回该块以重新请求
 
-        If no pending blocks exist, None is returned
+        如果没有待处理的块，则返回 None
         """
         current = int(round(time.time() * 1000))
         for request in self.pending_blocks:
             if self.peers[peer_id][request.block.piece]:
                 if request.added + self.max_pending_time < current:
-                    logging.info('Re-requesting block {block} for '
-                                 'piece {piece}'.format(
+                    logging.info('重新请求片段 {piece} 的块 {block}'.format(
                                     block=request.block.offset,
                                     piece=request.block.piece))
-                    # Reset expiration timer
+                    # 重置过期计时器
                     request.added = current
                     return request.block
         return None
 
     def _next_ongoing(self, peer_id) -> Block:
         """
-        Go through the ongoing pieces and return the next block to be
-        requested or None if no block is left to be requested.
+        遍历正在进行的片段并返回下一个要请求的块，如果没有块可请求则返回 None
         """
         for piece in self.ongoing_pieces:
             if self.peers[peer_id][piece.index]:
-                # Is there any blocks left to request in this piece?
+                # 此片段中还有块可请求吗？
                 block = piece.next_request()
                 if block:
                     self.pending_blocks.append(
@@ -456,9 +429,8 @@ class PieceManager:
 
     def _get_rarest_piece(self, peer_id):
         """
-        Given the current list of missing pieces, get the
-        rarest one first (i.e. a piece which fewest of its
-        neighboring peers have)
+        给定当前缺失片段列表，首先获取最稀有的片段
+        （即其相邻对等节点中最少拥有的片段）
         """
         piece_count = defaultdict(int)
         for piece in self.missing_pieces:
@@ -475,26 +447,23 @@ class PieceManager:
 
     def _next_missing(self, peer_id) -> Block:
         """
-        Go through the missing pieces and return the next block to request
-        or None if no block is left to be requested.
+        遍历缺失的片段并返回下一个要请求的块，如果没有块可请求则返回 None
 
-        This will change the state of the piece from missing to ongoing - thus
-        the next call to this function will not continue with the blocks for
-        that piece, rather get the next missing piece.
+        这将把片段状态从缺失更改为进行中 - 因此下次调用此函数时不会继续该片段的块，
+        而是获取下一个缺失的片段
         """
         for index, piece in enumerate(self.missing_pieces):
             if self.peers[peer_id][piece.index]:
-                # Move this piece from missing to ongoing
+                # 将此片段从缺失移动到进行中
                 piece = self.missing_pieces.pop(index)
                 self.ongoing_pieces.append(piece)
-                # The missing pieces does not have any previously requested
-                # blocks (then it is ongoing).
+                # 缺失的片段没有任何先前请求的块（否则它就是进行中的）
                 return piece.next_request()
         return None
 
     def _write(self, piece):
         """
-        Write the given piece to disk
+        将给定的片段写入磁盘
         """
         pos = piece.index * self.torrent.piece_length
         os.lseek(self.fd, pos, os.SEEK_SET)

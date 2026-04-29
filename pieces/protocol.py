@@ -1,19 +1,19 @@
 #
-# pieces - An experimental BitTorrent client
+# pieces - 一个实验性的 BitTorrent 客户端
 #
-# Copyright 2016 markus.eliasson@gmail.com
+# 版权所有 2016 markus.eliasson@gmail.com
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# 根据 Apache 许可证 2.0 版授权
+# 除非符合许可证规定，否则您不得使用此文件
+# 您可以在以下网址获取许可证副本
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# 除非适用法律要求或书面同意，软件
+# 根据许可证分发是基于"按原样"的基础，
+# 不提供任何明示或暗示的保证或条件
+# 请参阅许可证以了解具体的管理权限和
+# 限制
 
 import asyncio
 import logging
@@ -23,11 +23,10 @@ from concurrent.futures import CancelledError
 
 import bitstring
 
-# The default request size for blocks of pieces is 2^14 bytes.
+# 片段块的默认请求大小为 2^14 字节
 #
-# NOTE: The official specification states that 2^15 is the default request
-#       size - but in reality all implementations use 2^14. See the
-#       unofficial specification for more details on this matter.
+# 注意：官方规范声明 2^15 是默认请求大小 - 但实际上所有实现都使用 2^14
+#       有关此问题的更多详情，请参阅非官方规范
 #
 #       https://wiki.theory.org/BitTorrentSpecification
 #
@@ -40,39 +39,31 @@ class ProtocolError(BaseException):
 
 class PeerConnection:
     """
-    A peer connection used to download and upload pieces.
+    用于下载和上传片段的对等连接
 
-    The peer connection will consume one available peer from the given queue.
-    Based on the peer details the PeerConnection will try to open a connection
-    and perform a BitTorrent handshake.
+    对等连接将从给定队列中消费一个可用对等节点
+    根据对等节点详细信息，PeerConnection 将尝试打开连接并执行 BitTorrent 握手
 
-    After a successful handshake, the PeerConnection will be in a *choked*
-    state, not allowed to request any data from the remote peer. After sending
-    an interested message the PeerConnection will be waiting to get *unchoked*.
+    成功握手后，PeerConnection 将处于*被阻塞*状态，不允许从远程对等节点请求任何数据
+    发送感兴趣的消息后，PeerConnection 将等待被*解除阻塞*
 
-    Once the remote peer unchoked us, we can start requesting pieces.
-    The PeerConnection will continue to request pieces for as long as there are
-    pieces left to request, or until the remote peer disconnects.
+    一旦远程对等节点解除对我们的阻塞，我们就可以开始请求片段
+    PeerConnection 将继续请求片段，直到没有更多片段可请求，或远程对等节点断开连接
 
-    If the connection with a remote peer drops, the PeerConnection will consume
-    the next available peer from off the queue and try to connect to that one
-    instead.
+    如果与远程对等节点的连接断开，PeerConnection 将从队列中消费下一个可用对等节点并尝试连接
     """
     def __init__(self, queue: Queue, info_hash,
                  peer_id, piece_manager, on_block_cb=None):
         """
-        Constructs a PeerConnection and add it to the asyncio event-loop.
+        构造 PeerConnection 并将其添加到 asyncio 事件循环
 
-        Use `stop` to abort this connection and any subsequent connection
-        attempts
+        使用 `stop` 中止此连接和任何后续连接尝试
 
-        :param queue: The async Queue containing available peers
-        :param info_hash: The SHA1 hash for the meta-data's info
-        :param peer_id: Our peer ID used to to identify ourselves
-        :param piece_manager: The manager responsible to determine which pieces
-                              to request
-        :param on_block_cb: The callback function to call when a block is
-                            received from the remote peer
+        :param queue: 包含可用对等节点的异步队列
+        :param info_hash: 元数据信息的 SHA1 哈希
+        :param peer_id: 用于标识我们自己的对等节点 ID
+        :param piece_manager: 负责确定请求哪些片段的管理器
+        :param on_block_cb: 从远程对等节点接收到块时调用的回调函数
         """
         self.my_state = []
         self.peer_state = []
@@ -84,37 +75,35 @@ class PeerConnection:
         self.reader = None
         self.piece_manager = piece_manager
         self.on_block_cb = on_block_cb
-        self.future = asyncio.ensure_future(self._start())  # Start this worker
+        self.future = asyncio.ensure_future(self._start())  # 启动此工作进程
 
     async def _start(self):
         while 'stopped' not in self.my_state:
             ip, port = await self.queue.get()
-            logging.info('Got assigned peer with: {ip}'.format(ip=ip))
+            logging.info('分配到对等节点：{ip}'.format(ip=ip))
 
             try:
-                # TODO For some reason it does not seem to work to open a new
-                # connection if the first one drops (i.e. second loop).
+                # TODO 由于某种原因，如果第一个连接断开（即第二次循环），
+                # 打开新连接似乎不起作用
                 self.reader, self.writer = await asyncio.open_connection(
                     ip, port)
-                logging.info('Connection open to peer: {ip}'.format(ip=ip))
+                logging.info('已打开到对等节点的连接：{ip}'.format(ip=ip))
 
-                # It's our responsibility to initiate the handshake.
+                # 我们有责任发起握手
                 buffer = await self._handshake()
 
-                # TODO Add support for sending data
-                # Sending BitField is optional and not needed when client does
-                # not have any pieces. Thus we do not send any bitfield message
+                # TODO 添加发送数据的支持
+                # 发送 BitField 是可选的，当客户端没有任何片段时不需要
+                # 因此我们不发送任何位字段消息
 
-                # The default state for a connection is that peer is not
-                # interested and we are choked
+                # 连接的默认状态是对等节点不感兴趣且我们被阻塞
                 self.my_state.append('choked')
 
-                # Let the peer know we're interested in downloading pieces
+                # 让对等节点知道我们对下载片段感兴趣
                 await self._send_interested()
                 self.my_state.append('interested')
 
-                # Start reading responses as a stream of messages for as
-                # long as the connection is open and data is transmitted
+                # 只要连接打开且传输数据，就开始将响应作为消息流读取
                 async for message in PeerStreamIterator(self.reader, buffer):
                     if 'stopped' in self.my_state:
                         break
@@ -144,13 +133,13 @@ class PeerConnection:
                             block_offset=message.begin,
                             data=message.block)
                     elif type(message) is Request:
-                        # TODO Add support for sending data
-                        logging.info('Ignoring the received Request message.')
+                        # TODO 添加发送数据的支持
+                        logging.info('忽略收到的 Request 消息')
                     elif type(message) is Cancel:
-                        # TODO Add support for sending data
-                        logging.info('Ignoring the received Cancel message.')
+                        # TODO 添加发送数据的支持
+                        logging.info('忽略收到的 Cancel 消息')
 
-                    # Send block request to remote peer if we're interested
+                    # 如果我们感兴趣，向远程对等节点发送块请求
                     if 'choked' not in self.my_state:
                         if 'interested' in self.my_state:
                             if 'pending_request' not in self.my_state:
@@ -158,22 +147,22 @@ class PeerConnection:
                                 await self._request_piece()
 
             except ProtocolError as e:
-                logging.exception('Protocol error')
+                logging.exception('协议错误')
             except (ConnectionRefusedError, TimeoutError):
-                logging.warning('Unable to connect to peer')
+                logging.warning('无法连接到对等节点')
             except (ConnectionResetError, CancelledError):
-                logging.warning('Connection closed')
+                logging.warning('连接已关闭')
             except Exception as e:
-                logging.exception('An error occurred')
+                logging.exception('发生错误')
                 self.cancel()
                 raise e
             self.cancel()
 
     def cancel(self):
         """
-        Sends the cancel message to the remote peer and closes the connection.
+        向远程对等节点发送取消消息并关闭连接
         """
-        logging.info('Closing peer {id}'.format(id=self.remote_id))
+        logging.info('关闭对等节点 {id}'.format(id=self.remote_id))
         if not self.future.done():
             self.future.cancel()
         if self.writer:
@@ -183,12 +172,10 @@ class PeerConnection:
 
     def stop(self):
         """
-        Stop this connection from the current peer (if a connection exist) and
-        from connecting to any new peer.
+        停止此连接与当前对等节点的连接（如果存在）并停止连接任何新对等节点
         """
-        # Set state to stopped and cancel our future to break out of the loop.
-        # The rest of the cleanup will eventually be managed by loop calling
-        # `cancel`.
+        # 将状态设置为停止并取消我们的 future 以跳出循环
+        # 其余的清理工作最终将由循环调用 `cancel` 管理
         self.my_state.append('stopped')
         if not self.future.done():
             self.future.cancel()
@@ -198,8 +185,8 @@ class PeerConnection:
         if block:
             message = Request(block.piece, block.offset, block.length).encode()
 
-            logging.debug('Requesting block {block} for piece {piece} '
-                          'of {length} bytes from peer {peer}'.format(
+            logging.debug('向对等节点 {peer} 请求片段 {piece} 的块 {block} '
+                          '长度 {length} 字节'.format(
                             piece=block.piece,
                             block=block.offset,
                             length=block.length,
@@ -210,8 +197,7 @@ class PeerConnection:
 
     async def _handshake(self):
         """
-        Send the initial handshake to the remote peer and wait for the peer
-        to respond with its handshake.
+        向远程对等节点发送初始握手并等待对等节点回复其握手
         """
         self.writer.write(Handshake(self.info_hash, self.peer_id).encode())
         await self.writer.drain()
@@ -224,35 +210,30 @@ class PeerConnection:
 
         response = Handshake.decode(buf[:Handshake.length])
         if not response:
-            raise ProtocolError('Unable receive and parse a handshake')
+            raise ProtocolError('无法接收和解析握手')
         if not response.info_hash == self.info_hash:
-            raise ProtocolError('Handshake with invalid info_hash')
+            raise ProtocolError('握手使用的 info_hash 无效')
 
-        # TODO: According to spec we should validate that the peer_id received
-        # from the peer match the peer_id received from the tracker.
+        # TODO：根据规范，我们应该验证从对等节点接收的 peer_id 与从 tracker 接收的 peer_id 是否匹配
         self.remote_id = response.peer_id
-        logging.info('Handshake with peer was successful')
+        logging.info('与对等节点的握手成功')
 
-        # We need to return the remaining buffer data, since we might have
-        # read more bytes then the size of the handshake message and we need
-        # those bytes to parse the next message.
+        # 我们需要返回剩余的缓冲区数据，因为我们可能读取了比握手消息大小更多的字节
+        # 我们需要这些字节来解析下一条消息
         return buf[Handshake.length:]
 
     async def _send_interested(self):
         message = Interested()
-        logging.debug('Sending message: {type}'.format(type=message))
+        logging.debug('发送消息：{type}'.format(type=message))
         self.writer.write(message.encode())
         await self.writer.drain()
 
 
 class PeerStreamIterator:
     """
-    The `PeerStreamIterator` is an async iterator that continuously reads from
-    the given stream reader and tries to parse valid BitTorrent messages from
-    off that stream of bytes.
+    `PeerStreamIterator` 是一个异步迭代器，持续从给定的流读取器读取并尝试从字节流中解析有效的 BitTorrent 消息
 
-    If the connection is dropped, something fails the iterator will abort by
-    raising the `StopAsyncIteration` error ending the calling iteration.
+    如果连接断开或出现问题，迭代器将通过引发 `StopAsyncIteration` 错误来中止，结束调用迭代
     """
     CHUNK_SIZE = 10*1024
 
@@ -260,12 +241,12 @@ class PeerStreamIterator:
         self.reader = reader
         self.buffer = initial if initial else b''
 
-    async def __aiter__(self):
+    def __aiter__(self):
         return self
 
     async def __anext__(self):
-        # Read data from the socket. When we have enough data to parse, parse
-        # it and return the message. Until then keep reading from stream
+        # 从套接字读取数据。当我们有足够的数据可以解析时，解析它并返回消息
+        # 在此之前继续从流读取
         while True:
             try:
                 data = await self.reader.read(PeerStreamIterator.CHUNK_SIZE)
@@ -275,44 +256,42 @@ class PeerStreamIterator:
                     if message:
                         return message
                 else:
-                    logging.debug('No data read from stream')
+                    logging.debug('未从流读取到数据')
                     if self.buffer:
                         message = self.parse()
                         if message:
                             return message
                     raise StopAsyncIteration()
             except ConnectionResetError:
-                logging.debug('Connection closed by peer')
+                logging.debug('对等节点关闭了连接')
                 raise StopAsyncIteration()
             except CancelledError:
                 raise StopAsyncIteration()
             except StopAsyncIteration as e:
-                # Cath to stop logging
+                # 捕获以停止日志记录
                 raise e
             except Exception:
-                logging.exception('Error when iterating over stream!')
+                logging.exception('遍历流时出错！')
                 raise StopAsyncIteration()
         raise StopAsyncIteration()
 
     def parse(self):
         """
-        Tries to parse protocol messages if there is enough bytes read in the
-        buffer.
+        如果缓冲区中已读取足够的字节，尝试解析协议消息
 
-        :return The parsed message, or None if no message could be parsed
+        :return 解析的消息，如果无法解析任何消息则返回 None
         """
-        # Each message is structured as:
-        #     <length prefix><message ID><payload>
+        # 每条消息的结构为：
+        #     <长度前缀><消息 ID><负载>
         #
-        # The `length prefix` is a four byte big-endian value
-        # The `message ID` is a decimal byte
-        # The `payload` is the value of `length prefix`
+        # `长度前缀` 是一个四字节的大端值
+        # `消息 ID` 是一个十进制字节
+        # `负载` 是 `长度前缀` 的值
         #
-        # The message length is not part of the actual length. So another
-        # 4 bytes needs to be included when slicing the buffer.
+        # 消息长度不是实际长度的一部分。因此在切片缓冲区时需要额外包含 4 个字节
         header_length = 4
 
-        if len(self.buffer) > 4:  # 4 bytes is needed to identify the message
+        if len(self.buffer) > 4:  # 需要 4 个字节来识别消息
             message_length = struct.unpack('>I', self.buffer[0:4])[0]
 
             if message_length == 0:
@@ -322,11 +301,11 @@ class PeerStreamIterator:
                 message_id = struct.unpack('>b', self.buffer[4:5])[0]
 
                 def _consume():
-                    """Consume the current message from the read buffer"""
+                    """消费读取缓冲区中的当前消息"""
                     self.buffer = self.buffer[header_length + message_length:]
 
                 def _data():
-                    """"Extract the current message from the read buffer"""
+                    """"从读取缓冲区中提取当前消息"""
                     return self.buffer[:header_length + message_length]
 
                 if message_id is PeerMessage.BitField:
@@ -362,32 +341,29 @@ class PeerStreamIterator:
                     _consume()
                     return Cancel.decode(data)
                 else:
-                    logging.info('Unsupported message!')
+                    logging.info('不支持的消息！')
             else:
-                logging.debug('Not enough in buffer in order to parse')
+                logging.debug('缓冲区中没有足够的数据来解析')
         return None
 
 
 class PeerMessage:
     """
-    A message between two peers.
+    两个对等节点之间的消息
 
-    All of the remaining messages in the protocol take the form of:
-        <length prefix><message ID><payload>
+    协议中所有剩余的消息格式如下：
+        <长度前缀><消息 ID><负载>
 
-    - The length prefix is a four byte big-endian value.
-    - The message ID is a single decimal byte.
-    - The payload is message dependent.
+    - 长度前缀是一个四字节的大端值
+    - 消息 ID 是一个单字节十进制值
+    - 负载取决于消息
 
-    NOTE: The Handshake messageis different in layout compared to the other
-          messages.
+    注意：握手消息的格式与其他消息不同
 
-    Read more:
+    阅读更多：
         https://wiki.theory.org/BitTorrentSpecification#Messages
 
-    BitTorrent uses Big-Endian (Network Byte Order) for all messages, this is
-    declared as the first character being '>' in all pack / unpack calls to the
-    Python's `struct` module.
+    BitTorrent 对所有消息都使用大端序（网络字节顺序），这在 Python `struct` 模块的所有 pack/unpack 调用中声明为第一个字符 '>'
     """
     Choke = 0
     Unchoke = 1
@@ -399,51 +375,47 @@ class PeerMessage:
     Piece = 7
     Cancel = 8
     Port = 9
-    Handshake = None  # Handshake is not really part of the messages
-    KeepAlive = None  # Keep-alive has no ID according to spec
+    Handshake = None  # 握手实际上不属于消息
+    KeepAlive = None  # 根据规范，Keep-alive 没有 ID
 
     def encode(self) -> bytes:
         """
-        Encodes this object instance to the raw bytes representing the entire
-        message (ready to be transmitted).
+        将此对象实例编码为表示整条消息的原始字节（准备传输）
         """
         pass
 
     @classmethod
     def decode(cls, data: bytes):
         """
-        Decodes the given BitTorrent message into a instance for the
-        implementing type.
+        将给定的 BitTorrent 消息解码为实现类型的实例
         """
         pass
 
 
 class Handshake(PeerMessage):
     """
-    The handshake message is the first message sent and then received from a
-    remote peer.
+    握手消息是从远程对等节点发送然后接收的第一条消息
 
-    The messages is always 68 bytes long (for this version of BitTorrent
-    protocol).
+    该消息在此版本的 BitTorrent 协议中始终为 68 字节长
 
-    Message format:
+    消息格式：
         <pstrlen><pstr><reserved><info_hash><peer_id>
 
-    In version 1.0 of the BitTorrent protocol:
+    在 BitTorrent 协议 1.0 版中：
         pstrlen = 19
-        pstr = "BitTorrent protocol".
+        pstr = "BitTorrent protocol"
 
-    Thus length is:
-        49 + len(pstr) = 68 bytes long.
+    因此长度为：
+        49 + len(pstr) = 68 字节长
     """
     length = 49 + 19
 
     def __init__(self, info_hash: bytes, peer_id: bytes):
         """
-        Construct the handshake message
+        构造握手消息
 
-        :param info_hash: The SHA1 hash for the info dict
-        :param peer_id: The unique peer id
+        :param info_hash: info 字典的 SHA1 哈希
+        :param peer_id: 唯一的对等节点 ID
         """
         if isinstance(info_hash, str):
             info_hash = info_hash.encode('utf-8')
@@ -454,24 +426,22 @@ class Handshake(PeerMessage):
 
     def encode(self) -> bytes:
         """
-        Encodes this object instance to the raw bytes representing the entire
-        message (ready to be transmitted).
+        将此对象实例编码为表示整条消息的原始字节（准备传输）
         """
         return struct.pack(
             '>B19s8x20s20s',
-            19,                         # Single byte (B)
-            b'BitTorrent protocol',     # String 19s
-                                        # Reserved 8x (pad byte, no value)
-            self.info_hash,             # String 20s
-            self.peer_id)               # String 20s
+            19,                         # 单字节 (B)
+            b'BitTorrent protocol',     # 字符串 19s
+                                        # 保留 8x（填充字节，无值）
+            self.info_hash,             # 字符串 20s
+            self.peer_id)               # 字符串 20s
 
     @classmethod
     def decode(cls, data: bytes):
         """
-        Decodes the given BitTorrent message into a handshake message, if not
-        a valid message, None is returned.
+        将给定的 BitTorrent 消息解码为握手消息，如果不是有效消息则返回 None
         """
-        logging.debug('Decoding Handshake of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的握手'.format(
             length=len(data)))
         if len(data) < (49 + 19):
             return None
@@ -484,9 +454,9 @@ class Handshake(PeerMessage):
 
 class KeepAlive(PeerMessage):
     """
-    The Keep-Alive message has no payload and length is set to zero.
+    Keep-Alive 消息没有负载，长度设置为零
 
-    Message format:
+    消息格式：
         <len=0000>
     """
     def __str__(self):
@@ -495,10 +465,9 @@ class KeepAlive(PeerMessage):
 
 class BitField(PeerMessage):
     """
-    The BitField is a message with variable length where the payload is a
-    bit array representing all the bits a peer have (1) or does not have (0).
+    BitField 是一个可变长度的消息，其中负载是一个位数组，表示对等节点拥有的（1）或不拥有的（0）所有片段
 
-    Message format:
+    消息格式：
         <len=0001+X><id=5><bitfield>
     """
     def __init__(self, data):
@@ -506,8 +475,7 @@ class BitField(PeerMessage):
 
     def encode(self) -> bytes:
         """
-        Encodes this object instance to the raw bytes representing the entire
-        message (ready to be transmitted).
+        将此对象实例编码为表示整条消息的原始字节（准备传输）
         """
         bits_length = len(self.bitfield)
         return struct.pack('>Ib' + str(bits_length) + 's',
@@ -518,7 +486,7 @@ class BitField(PeerMessage):
     @classmethod
     def decode(cls, data: bytes):
         message_length = struct.unpack('>I', data[:4])[0]
-        logging.debug('Decoding BitField of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的 BitField'.format(
             length=message_length))
 
         parts = struct.unpack('>Ib' + str(message_length - 1) + 's', data)
@@ -530,21 +498,18 @@ class BitField(PeerMessage):
 
 class Interested(PeerMessage):
     """
-    The interested message is fix length and has no payload other than the
-    message identifiers. It is used to notify each other about interest in
-    downloading pieces.
+    感兴趣的消息是固定长度的，除了消息标识符外没有负载。用于相互通知对下载片段感兴趣
 
-    Message format:
+    消息格式：
         <len=0001><id=2>
     """
 
     def encode(self) -> bytes:
         """
-        Encodes this object instance to the raw bytes representing the entire
-        message (ready to be transmitted).
+        将此对象实例编码为表示整条消息的原始字节（准备传输）
         """
         return struct.pack('>Ib',
-                           1,  # Message length
+                           1,  # 消息长度
                            PeerMessage.Interested)
 
     def __str__(self):
@@ -553,11 +518,9 @@ class Interested(PeerMessage):
 
 class NotInterested(PeerMessage):
     """
-    The not interested message is fix length and has no payload other than the
-    message identifier. It is used to notify each other that there is no
-    interest to download pieces.
+    不感兴趣的消息是固定长度的，除了消息标识符外没有负载。用于相互通知对下载片段不感兴趣
 
-    Message format:
+    消息格式：
         <len=0001><id=3>
     """
     def __str__(self):
@@ -566,10 +529,9 @@ class NotInterested(PeerMessage):
 
 class Choke(PeerMessage):
     """
-    The choke message is used to tell the other peer to stop send request
-    messages until unchoked.
+    阻塞消息用于告诉另一个对等节点停止发送请求消息，直到解除阻塞
 
-    Message format:
+    消息格式：
         <len=0001><id=0>
     """
     def __str__(self):
@@ -578,10 +540,9 @@ class Choke(PeerMessage):
 
 class Unchoke(PeerMessage):
     """
-    Unchoking a peer enables that peer to start requesting pieces from the
-    remote peer.
+    解除对对岸对等节点的阻塞，使该对等节点能够开始从远程对等节点请求片段
 
-    Message format:
+    消息格式：
         <len=0001><id=1>
     """
     def __str__(self):
@@ -590,21 +551,20 @@ class Unchoke(PeerMessage):
 
 class Have(PeerMessage):
     """
-    Represents a piece successfully downloaded by the remote peer. The piece
-    is a zero based index of the torrents pieces
+    表示远程对等节点成功下载的片段。片段是 torrent 片段的从零开始的索引
     """
     def __init__(self, index: int):
         self.index = index
 
     def encode(self):
         return struct.pack('>IbI',
-                           5,  # Message length
+                           5,  # 消息长度
                            PeerMessage.Have,
                            self.index)
 
     @classmethod
     def decode(cls, data: bytes):
-        logging.debug('Decoding Have of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的 Have'.format(
             length=len(data)))
         index = struct.unpack('>IbI', data)[2]
         return cls(index)
@@ -615,22 +575,20 @@ class Have(PeerMessage):
 
 class Request(PeerMessage):
     """
-    The message used to request a block of a piece (i.e. a partial piece).
+    用于请求片段的块（即部分片段）的消息
 
-    The request size for each block is 2^14 bytes, except the final block
-    that might be smaller (since not all pieces might be evenly divided by the
-    request size).
+    每个块的请求大小为 2^14 字节，除了最后一个块可能更小（因为不是所有片段都能被请求大小整除）
 
-    Message format:
+    消息格式：
         <len=0013><id=6><index><begin><length>
     """
     def __init__(self, index: int, begin: int, length: int = REQUEST_SIZE):
         """
-        Constructs the Request message.
+        构造 Request 消息
 
-        :param index: The zero based piece index
-        :param begin: The zero based offset within a piece
-        :param length: The requested length of data (default 2^14)
+        :param index: 从零开始的片段索引
+        :param begin: 片段内的从零开始的偏移量
+        :param length: 请求的数据长度（默认 2^14）
         """
         self.index = index
         self.begin = begin
@@ -646,9 +604,9 @@ class Request(PeerMessage):
 
     @classmethod
     def decode(cls, data: bytes):
-        logging.debug('Decoding Request of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的 Request'.format(
             length=len(data)))
-        # Tuple with (message length, id, index, begin, length)
+        # 元组（消息长度、id、索引、开始、长度）
         parts = struct.unpack('>IbIII', data)
         return cls(parts[2], parts[3], parts[4])
 
@@ -658,26 +616,24 @@ class Request(PeerMessage):
 
 class Piece(PeerMessage):
     """
-    A block is a part of a piece mentioned in the meta-info. The official
-    specification refer to them as pieces as well - which is quite confusing
-    the unofficial specification refers to them as blocks however.
+    块是元信息中提到的片段的一部分。官方规范也将它们称为片段 - 这相当令人困惑
+    非官方规范将它们称为块
 
-    So this class is named `Piece` to match the message in the specification
-    but really, it represents a `Block` (which is non-existent in the spec).
+    所以这个类被命名为 `Piece` 以匹配规范中的消息，但实际上，它代表一个 `Block`（在规范中不存在）
 
-    Message format:
+    消息格式：
         <length prefix><message ID><index><begin><block>
     """
-    # The Piece message length without the block data
+    # 没有块数据的 Piece 消息长度
     length = 9
 
     def __init__(self, index: int, begin: int, block: bytes):
         """
-        Constructs the Piece message.
+        构造 Piece 消息
 
-        :param index: The zero based piece index
-        :param begin: The zero based offset within a piece
-        :param block: The block data
+        :param index: 从零开始的片段索引
+        :param begin: 片段内的从零开始的偏移量
+        :param block: 块数据
         """
         self.index = index
         self.begin = begin
@@ -694,7 +650,7 @@ class Piece(PeerMessage):
 
     @classmethod
     def decode(cls, data: bytes):
-        logging.debug('Decoding Piece of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的 Piece'.format(
             length=len(data)))
         length = struct.unpack('>I', data[:4])[0]
         parts = struct.unpack('>IbII' + str(length - Piece.length) + 's',
@@ -707,10 +663,9 @@ class Piece(PeerMessage):
 
 class Cancel(PeerMessage):
     """
-    The cancel message is used to cancel a previously requested block (in fact
-    the message is identical (besides from the id) to the Request message).
+    取消消息用于取消先前请求的块（事实上，除了 id 之外，该消息与 Request 消息相同）
 
-    Message format:
+    消息格式：
          <len=0013><id=8><index><begin><length>
     """
     def __init__(self, index, begin, length: int = REQUEST_SIZE):
@@ -728,9 +683,9 @@ class Cancel(PeerMessage):
 
     @classmethod
     def decode(cls, data: bytes):
-        logging.debug('Decoding Cancel of length: {length}'.format(
+        logging.debug('解码长度为 {length} 的 Cancel'.format(
             length=len(data)))
-        # Tuple with (message length, id, index, begin, length)
+        # 元组（消息长度、id、索引、开始、长度）
         parts = struct.unpack('>IbIII', data)
         return cls(parts[2], parts[3], parts[4])
 
